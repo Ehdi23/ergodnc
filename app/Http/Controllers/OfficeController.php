@@ -20,7 +20,9 @@ class OfficeController extends Controller
             // if the request contains a host_id (condition ture), invoke the closure fn ($builder) => $builder->whereUserId(request('host_id'))
             ->when(request('host_id'), fn ($builder) => $builder->whereUserId(request('host_id')))
             ->when(request('user_id'), fn ($builder) => $builder->whereRelation('reservations', 'user_id', '=', request('user_id')))
-            ->latest('id')
+            ->when(
+                request('lat') && request('lng'), fn ($builder) => $builder->nearestTo(request('lat'), request('lng')), fn ($builder) => $builder->orderBy('id', 'ASC')
+            )
             ->with(['images', 'tags', 'user'])
             ->withCount(['reservations' => fn ($builder) => $builder->where('status', Reservation::STATUS_ACTIVE)])
             ->paginate(20);
@@ -28,5 +30,12 @@ class OfficeController extends Controller
         return OfficeResource::collection(
             $offices
         );
+    }
+
+    public function show(Office $office) 
+    {
+        $office->loadCount(['reservations' => fn ($builder) => $builder->where('status', Reservation::STATUS_ACTIVE)])
+        ->load(['images', 'tags', 'user']);
+        return OfficeResource::make($office);
     }
 }
