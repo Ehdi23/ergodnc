@@ -24,19 +24,19 @@ it('lists offices that are approved and not hidden', function () {
     expect($response->json())->toHaveKeys(['meta', 'links']);
 });
 
-it('filters by host id', function () {
+it('filters by user id', function () {
     Office::factory(3)->create();
 
     $host = User::factory()->create();
     $office = Office::factory()->for($host)->create();
 
-    $response = $this->get('/api/offices?host_id=' . $host->id);
+    $response = $this->get('/api/offices?user_id=' . $host->id);
     $response->assertOk();
     expect($response->json())->toBeGreaterThanOrEqual(1);
     $this->assertEquals($office->id, $response->json('data')[0]['id']);
 });
 
-it('filters by user id', function () {
+it('filters by visitor id', function () {
     Office::factory(3)->create();
 
     $user = User::factory()->create();
@@ -45,7 +45,7 @@ it('filters by user id', function () {
     Reservation::factory()->for($office::factory())->create();
     Reservation::factory()->for($office)->for($user)->create();
 
-    $response = $this->get('/api/offices?user_id=' . $user->id);
+    $response = $this->get('/api/offices?visitor_id=' . $user->id);
     $response->assertOk();
     expect($response->json())->toBeGreaterThanOrEqual(1);
     $this->assertEquals($office->id, $response->json('data')[0]['id']);
@@ -53,7 +53,7 @@ it('filters by user id', function () {
 
 it('include images tags and user', function () {
     $user = User::factory()->create();
-    $tag = Tag::factory(['name' => 'mokrane'])->create();
+    $tag = Tag::factory()->create(['name' => fake()->name()]);
     $office = Office::factory()->for($user)->create();
 
     $office->tags()->attach($tag);
@@ -61,6 +61,9 @@ it('include images tags and user', function () {
 
     $response = $this->get('/api/offices');
     expect($response->json('data')[0])->toHaveKeys(['images', 'tags', 'user']);
+    $response->assertOk()
+        ->assertJsonCount(1, 'data.0.tags')
+        ->assertJsonCount(1, 'data.0.images');
 });
 
 it('returns the number of active reservations', function () {
@@ -102,7 +105,7 @@ it('Orders by distance when coordinates are provided', function () {
 
 it('shows the office', function () {
     $user = User::factory()->create();
-    $tag = Tag::factory(['name' => 'mokrane'])->create();
+    $tag = Tag::factory(['name' => fake()->name()])->create();
     $office = Office::factory()->for($user)->create();
 
 
@@ -120,4 +123,48 @@ it('shows the office', function () {
     $this->assertIsArray($response->json('data')['tags']);
     $this->assertCount(1, $response->json('data')['tags']);
     $this->assertEquals($user->id, $response->json('data')['user']['id']);
+});
+
+it('Create an office', function () {
+    $user = User::factory()->createQuietly();
+    $this->actingAs($user);
+
+    $tag = Tag::factory(['name' => fake()->name()])->create();
+    $tag1 = Tag::factory(['name' => fake()->name()])->create();
+
+    $response = $this->postJson('/api/offices', [
+        'title' => 'Bonjour les gens',
+        'description' => 'Description',
+        'lat' => '39.74051727562952',
+        'lng' => '-8.770375324893696',
+        'address_line1' => 'address',
+        'price_per_day' => 10_000,
+        'monthly_discount' => 5,
+        'tags' => [
+            $tag->id,
+            $tag1->id
+        ]
+    ]);
+
+    expect($response->json()['data']['tags'])
+        ->toBeArray()
+        ->toBeGreaterThanOrEqual(2);
+    expect($response->json()['data']['title'])->toBeString();
+
+    $this->assertDatabaseHas('offices', [
+        'title' => 'Bonjour les gens'
+    ]);
+});
+
+it('Can create an office only if the token is correct', function () {
+    $user = User::factory()->createQuietly();
+
+    $this->actingAs($user);
+
+    $token = $user->createToken('office.create')->plainTextToken;
+
+    $response = $this->postJson('/api/offices', [], [
+        'Authorization' => 'Bearer' .$token
+    ]);
+
 });
