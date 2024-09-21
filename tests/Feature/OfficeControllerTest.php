@@ -1,10 +1,11 @@
 <?php
 
-use App\Models\Image;
 use App\Models\Tag;
 use App\Models\User;
+use App\Models\Image;
 use App\Models\Office;
 use App\Models\Reservation;
+use Illuminate\Http\Response;
 
 it('lists all offices in paginated way', function () {
     Office::factory(3)->create();
@@ -143,7 +144,7 @@ it('Create an office', function () {
         'tags' => [
             $tag->id,
             $tag1->id
-        ]
+        ],
     ]);
 
     expect($response->json()['data']['tags'])
@@ -156,6 +157,48 @@ it('Create an office', function () {
     ]);
 });
 
+it('UpdatesAnOffice', function () {
+    $user = User::factory()->create();
+    $tags = Tag::factory(3, ["name" => fake()->name()])->create();
+    $anotherTag = Tag::factory(["name" => fake()->name()])->create();
+    $office = Office::factory()->for($user)->create();
+
+    $office->tags()->attach($tags);
+
+    $this->actingAs($user);
+
+    $response = $this->putJson('api/offices/' . $office->id, [
+        'title' => 'Amazing Office',
+        'tags' => [$tags[0]->id, $anotherTag->id]
+    ]);
+
+    $response->assertOk()
+        ->assertJsonCount(2, 'data.tags')
+        ->assertJsonPath('data.tags.0.id', $tags[0]->id)
+        ->assertJsonPath('data.tags.1.id', $anotherTag->id)
+        ->assertJsonPath('data.title', 'Amazing Office');
+});
+
+it('Doesn\'t update an office that doesnt belong to an user', function () {
+    $user = User::factory()->create();
+    $anotherUser = User::factory()->create();
+    $tags = Tag::factory(3, ["name" => fake()->name()])->create();
+    $office = Office::factory()->for($anotherUser)->create();
+
+    $office->tags()->attach($tags);
+
+    $this->actingAs($user);
+
+    $anotherTag = Tag::factory(["name" => fake()->name()])->create();
+
+    $response = $this->putJson('api/offices/' . $office->id, [
+        'title' => 'Amazing Office',
+        'tags' => [$tags[0]->id, $anotherTag->id]
+    ]);
+
+    expect($response->assertStatus(Response::HTTP_FORBIDDEN));
+});
+
 it('Can create an office only if the token is correct', function () {
     $user = User::factory()->createQuietly();
 
@@ -164,7 +207,6 @@ it('Can create an office only if the token is correct', function () {
     $token = $user->createToken('office.create')->plainTextToken;
 
     $response = $this->postJson('/api/offices', [], [
-        'Authorization' => 'Bearer' .$token
+        'Authorization' => 'Bearer' . $token
     ]);
-
 });

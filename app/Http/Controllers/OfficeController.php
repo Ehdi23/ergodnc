@@ -5,15 +5,18 @@ namespace App\Http\Controllers;
 use App\Models\Office;
 use App\Models\Reservation;
 use Illuminate\Support\Arr;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Resources\OfficeResource;
+use App\Models\Validators\OfficeValidator;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-
 class OfficeController extends Controller
 {
+    use AuthorizesRequests;
     /**
      * Display a listing of the resource.
      */
@@ -48,9 +51,7 @@ class OfficeController extends Controller
 
     public function create(): JsonResource
     {
-        if(!auth()->user()->tokenCan('office.create')) {
-            abort(Response::HTTP_FORBIDDEN);
-        }
+        abort_unless(auth()->user()->tokenCan('office.create'), Response::HTTP_FORBIDDEN);
 
         $attributes = validator(
             request()->all(),
@@ -68,21 +69,58 @@ class OfficeController extends Controller
                 'tags.*' => ['integer', Rule::exists('tags', 'id')]
             ]
         )->validate();
-        $user = Auth::user();
 
-        if (!$user) {
-            abort(403, 'Unauthorized');
-        }
-        // On peut directement appliquer la modification sur l'user_id comme ceci :
-        // $attributes['user_id'] = $user->id;
+        $office = DB::transaction(function () use ($attributes) {
+            $user = Auth::user();
 
-        $attributes['approval_status'] = Office::APPROVAL_PENDING;
+            // S'assurer que l'utilisateur est bien authentifié
+            if (!$user) {
+                abort(403, 'Unauthorized');
+            }
 
-        // Sinon, on peut utiliser la relation entre les deux tables pour directement attacher l'user_id.
-        $office = Auth::user()->offices()->create(Arr::except($attributes, ['tags']));
+            // Créer l'office
+            $office = $user->offices()->create(Arr::except($attributes, ['tags']));
 
-        $office->tags()->sync($attributes['tags']);
+            // Synchroniser les tags
+            if (isset($attributes['tags'])) {
+                $office->tags()->attach($attributes['tags']);
+            };
 
-        return new OfficeResource($office);
+            return $office; // Retourner l'office pour la réponse
+        });
+
+        return OfficeResource::make(
+            $office->load(['images', 'tags', 'user'])
+        );
+    }
+
+    public function update(Office $office): JsonResource
+    {
+        abort_unless(auth()->user()->tokenCan('office.update'), Response::HTTP_FORBIDDEN);
+
+        $this->authorize('update', $office);
+
+        $attributes = (new OfficeValidator())->validate(
+            $office,
+            request()->all()
+        );
+
+        DB::transaction(function () use ($office, $attributes) {
+            
+            $office->save();
+
+            $office->fill(Arr::except($attributes, ['tags']))->save();
+
+            // Synchroniser les tags
+            if (isset($attributes['tags'])) {
+                $office->tags()->sync($attributes['tags']);
+            }
+
+            return $office; // Retourner l'office pour la réponse
+        });
+
+        return OfficeResource::make(
+            $office->load(['images', 'tags', 'user'])
+        );
     }
 }
