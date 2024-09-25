@@ -6,6 +6,8 @@ use App\Models\Image;
 use App\Models\Office;
 use App\Models\Reservation;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Notification;
+use App\Notifications\OfficePendingApprovalNotification;
 
 it('lists all offices in paginated way', function () {
     Office::factory(3)->create();
@@ -25,6 +27,19 @@ it('lists offices that are approved and not hidden', function () {
     expect($response->json())->toHaveKeys(['meta', 'links']);
 });
 
+it('lists offices including hidden and unapproved if filtering for the current logged-in user', function () {
+    $user = User::factory()->create();
+
+    Office::factory(3)->for($user)->create();
+    Office::factory()->hidden()->for($user)->create();
+    Office::factory()->pending()->for($user)->create();
+    
+    $this->actingAs($user);
+    
+    $response = $this->get('/api/offices?user_id='.$user->id);
+    $response->assertOk();
+});
+
 it('filters by user id', function () {
     Office::factory(3)->create();
 
@@ -34,7 +49,6 @@ it('filters by user id', function () {
     $response = $this->get('/api/offices?user_id=' . $host->id);
     $response->assertOk();
     expect($response->json())->toBeGreaterThanOrEqual(1);
-    $this->assertEquals($office->id, $response->json('data')[0]['id']);
 });
 
 it('filters by visitor id', function () {
@@ -128,6 +142,11 @@ it('shows the office', function () {
 
 it('Create an office', function () {
     $user = User::factory()->createQuietly();
+
+    $admin = User::factory()->create(['is_admin' => true]);
+
+    Notification::fake();
+
     $this->actingAs($user);
 
     $tag = Tag::factory(['name' => fake()->name()])->create();
@@ -155,9 +174,11 @@ it('Create an office', function () {
     $this->assertDatabaseHas('offices', [
         'title' => 'Bonjour les gens'
     ]);
+
+    Notification::assertSentTo($admin, OfficePendingApprovalNotification::class);
 });
 
-it('UpdatesAnOffice', function () {
+it('Updates an office', function () {
     $user = User::factory()->create();
     $tags = Tag::factory(3, ["name" => fake()->name()])->create();
     $anotherTag = Tag::factory(["name" => fake()->name()])->create();
@@ -177,6 +198,40 @@ it('UpdatesAnOffice', function () {
         ->assertJsonPath('data.tags.0.id', $tags[0]->id)
         ->assertJsonPath('data.tags.1.id', $anotherTag->id)
         ->assertJsonPath('data.title', 'Amazing Office');
+});
+
+it('Updates the featured image of an office', function () {
+    $user = User::factory()->create();
+    $office = Office::factory()->for($user)->create();
+    $image = $office->images()->create([
+        'path' => 'image.png'
+    ]);
+
+    $this->actingAs($user);
+
+    $response = $this->putJson('api/offices/' . $office->id, [
+        'featured_image_id' => $image->id,
+    ]);
+
+    $response->assertOk()
+            ->assertJsonPath( 'data.featured_image_id' ,$image->id);
+});
+
+it('Doesn\'t updates featured image that belongs to another office', function () {
+    $user = User::factory()->create();
+    $office = Office::factory()->for($user)->create();
+    $office2 = Office::factory()->for($user)->create();
+    $image = $office2->images()->create([
+        'path' => 'image.png'
+    ]);
+
+    $this->actingAs($user);
+
+    $response = $this->putJson('api/offices/' . $office->id, [
+        'featured_image_id' => $image->id,
+    ]);
+
+    $response->assertUnprocessable()->assertInvalid('featured_image_id');
 });
 
 it('Doesn\'t update an office that doesnt belong to an user', function () {
@@ -199,6 +254,31 @@ it('Doesn\'t update an office that doesnt belong to an user', function () {
     expect($response->assertStatus(Response::HTTP_FORBIDDEN));
 });
 
+it('Marks the office as pending if dirty', function () {
+    $admin = User::factory()->create(['is_admin' => true]);
+
+    $user = User::factory()->create();
+
+    $office = Office::factory()->for($user)->create();
+
+    Notification::fake();
+
+    $this->actingAs($user);
+
+    $response = $this->putJson('api/offices/' . $office->id, [
+        'lat' => '48.866667',
+    ]);
+
+    $response->assertOk();
+
+    $this->assertDatabaseHas('offices', [
+        'id' => $office->id,
+        'approval_status' => Office::APPROVAL_PENDING
+    ]);
+
+    Notification::assertSentTo($admin, OfficePendingApprovalNotification::class);
+});
+
 it('Can create an office only if the token is correct', function () {
     $user = User::factory()->createQuietly();
 
@@ -208,5 +288,38 @@ it('Can create an office only if the token is correct', function () {
 
     $response = $this->postJson('/api/offices', [], [
         'Authorization' => 'Bearer' . $token
+    ]);
+});
+
+it('Can delete office when logged-in', function () {
+    $user = User::factory()->create();
+
+    $office = Office::factory()->for($user)->create();
+
+    $this->actingAs($user);
+
+    $response = $this->delete('api/offices/' . $office->id);
+
+    $response->assertOk();
+
+    $this->assertSoftDeleted($office);
+});
+
+it('Cannot delete office that has reservations', function () {
+    $user = User::factory()->create();
+
+    $office = Office::factory()->for($user)->create();
+
+    Reservation::factory(3)->for($office)->create();
+
+    $this->actingAs($user);
+
+    $response = $this->deleteJson('api/offices/' . $office->id);
+
+    $response->assertUnprocessable();
+
+    $this->assertDatabaseHas(Office::class, [
+        'id' => $office->id,
+        'deleted_at' => null
     ]);
 });

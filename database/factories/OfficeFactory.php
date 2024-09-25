@@ -34,7 +34,7 @@ class OfficeFactory extends Factory
 
     public function pending (): Factory
     {
-        return $this->status([
+        return $this->state([
             'approval_status' => Office::APPROVAL_PENDING
         ]);
     }

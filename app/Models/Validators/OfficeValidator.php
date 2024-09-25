@@ -17,10 +17,12 @@ class OfficeValidator
                 'lat' => ['sometimes', 'required', 'numeric'],
                 'lng' => ['sometimes', 'required', 'numeric'],
                 'address_line1' => ['sometimes', 'required', 'string'],
+                
+                'featured_image_id' => [Rule::exists('images', 'id')->where('resource_type', 'office')->where('resource_id', $office->id)],
                 'hidden' => ['bool'],
                 'price_per_day' => ['sometimes', 'required', 'integer', 'min:100'],
                 'monthly_discount' => ['integer', 'min:0'],
-
+                
                 'tags' => ['array'],
                 'tags.*' => ['integer', Rule::exists('tags', 'id')]
             ]
