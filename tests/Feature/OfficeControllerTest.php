@@ -5,7 +5,9 @@ use App\Models\User;
 use App\Models\Image;
 use App\Models\Office;
 use App\Models\Reservation;
+use Laravel\Sanctum\Sanctum;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\OfficePendingApprovalNotification;
 
@@ -34,7 +36,7 @@ it('lists offices including hidden and unapproved if filtering for the current l
     Office::factory()->hidden()->for($user)->create();
     Office::factory()->pending()->for($user)->create();
     
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
     
     $response = $this->get('/api/offices?user_id='.$user->id);
     $response->assertOk();
@@ -141,13 +143,13 @@ it('shows the office', function () {
 });
 
 it('Create an office', function () {
-    $user = User::factory()->createQuietly();
+    $user = User::factory()->create();
+
+    Sanctum::actingAs($user, ['office.create']);
 
     $admin = User::factory()->create(['is_admin' => true]);
 
     Notification::fake();
-
-    $this->actingAs($user);
 
     $tag = Tag::factory(['name' => fake()->name()])->create();
     $tag1 = Tag::factory(['name' => fake()->name()])->create();
@@ -186,7 +188,7 @@ it('Updates an office', function () {
 
     $office->tags()->attach($tags);
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['office.update']);
 
     $response = $this->putJson('api/offices/' . $office->id, [
         'title' => 'Amazing Office',
@@ -207,7 +209,7 @@ it('Updates the featured image of an office', function () {
         'path' => 'image.png'
     ]);
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['office.update']);
 
     $response = $this->putJson('api/offices/' . $office->id, [
         'featured_image_id' => $image->id,
@@ -225,7 +227,7 @@ it('Doesn\'t updates featured image that belongs to another office', function ()
         'path' => 'image.png'
     ]);
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
 
     $response = $this->putJson('api/offices/' . $office->id, [
         'featured_image_id' => $image->id,
@@ -242,7 +244,7 @@ it('Doesn\'t update an office that doesnt belong to an user', function () {
 
     $office->tags()->attach($tags);
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
 
     $anotherTag = Tag::factory(["name" => fake()->name()])->create();
 
@@ -263,7 +265,7 @@ it('Marks the office as pending if dirty', function () {
 
     Notification::fake();
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
 
     $response = $this->putJson('api/offices/' . $office->id, [
         'lat' => '48.866667',
@@ -282,7 +284,7 @@ it('Marks the office as pending if dirty', function () {
 it('Can create an office only if the token is correct', function () {
     $user = User::factory()->createQuietly();
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
 
     $token = $user->createToken('office.create')->plainTextToken;
 
@@ -292,17 +294,28 @@ it('Can create an office only if the token is correct', function () {
 });
 
 it('Can delete office when logged-in', function () {
+    Storage::put('/office_image.jpg', 'empty');
+
     $user = User::factory()->create();
 
     $office = Office::factory()->for($user)->create();
 
-    $this->actingAs($user);
+    $image = $office->images()->create([
+        'path' => 'office_image.jpg',
+    ]);
+
+    Sanctum::actingAs($user, ['*']);
 
     $response = $this->delete('api/offices/' . $office->id);
 
     $response->assertOk();
 
     $this->assertSoftDeleted($office);
+        // Vérifie que l'image a bien été supprimée
+        $this->assertModelMissing($image);
+
+        // Vérifie que l'image n'est plus présente dans le stockage public
+        Storage::assertMissing('office_image.jpg');
 });
 
 it('Cannot delete office that has reservations', function () {
@@ -312,14 +325,12 @@ it('Cannot delete office that has reservations', function () {
 
     Reservation::factory(3)->for($office)->create();
 
-    $this->actingAs($user);
+    Sanctum::actingAs($user, ['*']);
 
     $response = $this->deleteJson('api/offices/' . $office->id);
 
     $response->assertUnprocessable();
 
-    $this->assertDatabaseHas(Office::class, [
-        'id' => $office->id,
-        'deleted_at' => null
-    ]);
+    $this->assertNotSoftDeleted($office);
+
 });

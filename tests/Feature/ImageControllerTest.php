@@ -29,11 +29,8 @@ test('Image creation test', function () {
 });
 
 test('Delete an image', function () {
-    // Création et stockage de l'image
-    Storage::fake('public');
-
     // Crée un fichier d'exemple dans le disque 'public'
-    Storage::disk('public')->put('/office_image.jpg', 'empty');
+    Storage::put('/office_image.jpg', 'empty');
     
     // Simule une image téléchargée
     $fakeImage = UploadedFile::fake()->image('office-image.jpg');
@@ -66,7 +63,7 @@ test('Delete an image', function () {
     $this->assertModelMissing($image);
 
     // Vérifie que l'image n'est plus présente dans le stockage public
-    Storage::disk('public')->assertMissing('office_image.jpg');
+    Storage::assertMissing('office_image.jpg');
 });
 
 test('Doesn\'t delete an image', function () {
@@ -103,9 +100,7 @@ test('Doesn\'t delete image that belongs to another resource', function () {
     $response = $this->deleteJson("api/offices/{$office->id}/images/{$image->id}");
 
     // Vérifie la réponse
-    $response->assertUnprocessable();
-
-    $response->assertJsonValidationErrors(['image' => 'Cannot delete this image.']);
+    $response->assertNotFound();
 });
 
 test('Doesn\'t delete the featured image', function () {

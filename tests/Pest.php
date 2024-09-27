@@ -11,8 +11,11 @@
 |
 */
 
+use Illuminate\Contracts\Auth\Authenticatable as UserContract;
+use Laravel\Sanctum\Sanctum;
+
 pest()->extend(Tests\TestCase::class)
-    ->use(Illuminate\Foundation\Testing\RefreshDatabase::class)
+    ->use(Illuminate\Foundation\Testing\LazilyRefreshDatabase::class)
     ->in('Feature');
 
 /*
@@ -41,7 +44,9 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+function actingAsUser(UserContract $user, $abilities = ['*'])
 {
-    // ..
+    return Sanctum::actingAs($user, $abilities);
+
+    // No return statement needed
 }
