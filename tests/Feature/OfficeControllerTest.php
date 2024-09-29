@@ -8,6 +8,7 @@ use App\Models\Reservation;
 use Laravel\Sanctum\Sanctum;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
+use App\Notifications\OfficePendingApproval;
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\OfficePendingApprovalNotification;
 
@@ -35,10 +36,10 @@ it('lists offices including hidden and unapproved if filtering for the current l
     Office::factory(3)->for($user)->create();
     Office::factory()->hidden()->for($user)->create();
     Office::factory()->pending()->for($user)->create();
-    
+
     Sanctum::actingAs($user, ['*']);
-    
-    $response = $this->get('/api/offices?user_id='.$user->id);
+
+    $response = $this->get('/api/offices?user_id=' . $user->id);
     $response->assertOk();
 });
 
@@ -63,6 +64,7 @@ it('filters by visitor id', function () {
     Reservation::factory()->for($office)->for($user)->create();
 
     $response = $this->get('/api/offices?visitor_id=' . $user->id);
+
     $response->assertOk();
     expect($response->json())->toBeGreaterThanOrEqual(1);
     $this->assertEquals($office->id, $response->json('data')[0]['id']);
@@ -77,6 +79,7 @@ it('include images tags and user', function () {
     $office->images()->create(['path' => 'image.jpg']);
 
     $response = $this->get('/api/offices');
+
     expect($response->json('data')[0])->toHaveKeys(['images', 'tags', 'user']);
     $response->assertOk()
         ->assertJsonCount(1, 'data.0.tags')
@@ -143,41 +146,29 @@ it('shows the office', function () {
 });
 
 it('Create an office', function () {
-    $user = User::factory()->create();
-
-    Sanctum::actingAs($user, ['office.create']);
+    Notification::fake();
 
     $admin = User::factory()->create(['is_admin' => true]);
 
-    Notification::fake();
+    $user = User::factory()->create();
+    $tags = Tag::factory(2)->create();
 
-    $tag = Tag::factory(['name' => fake()->name()])->create();
-    $tag1 = Tag::factory(['name' => fake()->name()])->create();
+    Sanctum::actingAs($user, ['*']);
 
-    $response = $this->postJson('/api/offices', [
-        'title' => 'Bonjour les gens',
-        'description' => 'Description',
-        'lat' => '39.74051727562952',
-        'lng' => '-8.770375324893696',
-        'address_line1' => 'address',
-        'price_per_day' => 10_000,
-        'monthly_discount' => 5,
-        'tags' => [
-            $tag->id,
-            $tag1->id
-        ],
-    ]);
+    $response = $this->postJson('api/offices', Office::factory()->raw([
+        'tags' => $tags->pluck('id')->toArray(),
+    ]));
 
-    expect($response->json()['data']['tags'])
-        ->toBeArray()
-        ->toBeGreaterThanOrEqual(2);
-    expect($response->json()['data']['title'])->toBeString();
+    $response->assertCreated()
+        ->assertJsonPath('data.approval_status', Office::APPROVAL_PENDING)
+        ->assertJsonPath('data.user.id', $user->id)
+        ->assertJsonCount(2, 'data.tags');
 
     $this->assertDatabaseHas('offices', [
-        'title' => 'Bonjour les gens'
+        'id' => $response->json('data.id')
     ]);
 
-    Notification::assertSentTo($admin, OfficePendingApprovalNotification::class);
+    Notification::assertSentTo($admin, OfficePendingApproval::class);
 });
 
 it('Updates an office', function () {
@@ -216,7 +207,7 @@ it('Updates the featured image of an office', function () {
     ]);
 
     $response->assertOk()
-            ->assertJsonPath( 'data.featured_image_id' ,$image->id);
+        ->assertJsonPath('data.featured_image_id', $image->id);
 });
 
 it('Doesn\'t updates featured image that belongs to another office', function () {
@@ -311,11 +302,11 @@ it('Can delete office when logged-in', function () {
     $response->assertOk();
 
     $this->assertSoftDeleted($office);
-        // Vérifie que l'image a bien été supprimée
-        $this->assertModelMissing($image);
+    // Vérifie que l'image a bien été supprimée
+    $this->assertModelMissing($image);
 
-        // Vérifie que l'image n'est plus présente dans le stockage public
-        Storage::assertMissing('office_image.jpg');
+    // Vérifie que l'image n'est plus présente dans le stockage public
+    Storage::assertMissing('office_image.jpg');
 });
 
 it('Cannot delete office that has reservations', function () {
@@ -332,5 +323,22 @@ it('Cannot delete office that has reservations', function () {
     $response->assertUnprocessable();
 
     $this->assertNotSoftDeleted($office);
+});
 
+it('Filters By Tags', function () {
+    $tags = Tag::factory(2)->create();
+
+    $office = Office::factory()->hasAttached($tags)->create();
+    Office::factory()->hasAttached($tags->first())->create();
+    Office::factory()->create();
+
+    $response = $this->get(
+        'api/offices?' . http_build_query([
+            'tags' => $tags->pluck('id')->toArray()
+        ])
+    );
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.id', $office->id);
 });

@@ -2,22 +2,21 @@
 
 namespace App\Notifications;
 
-use App\Models\Office;
+use App\Models\Reservation;
 use Illuminate\Bus\Queueable;
+use Illuminate\Notifications\Notification;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
-use Illuminate\Notifications\Notification;
 
-class OfficePendingApprovalNotification extends Notification implements ShouldQueue
+class NewHostReservation extends Notification implements ShouldQueue
 {
     use Queueable;
 
     /**
      * Create a new notification instance.
      */
-    public function __construct(public Office $office)
-    {
-        //
+    public function __construct(public Reservation $reservation)
+    {   
     }
 
     /**

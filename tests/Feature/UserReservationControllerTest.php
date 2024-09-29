@@ -5,6 +5,13 @@ use App\Models\Office;
 use App\Models\Reservation;
 use Laravel\Sanctum\Sanctum;
 use Illuminate\Support\Facades\DB;
+use App\Notifications\NewHostReservation;
+use App\Notifications\NewUserReservation;
+use Illuminate\Foundation\Testing\WithFaker;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+
 
 
 it('Lists Reservations That Belong To The User', function () {
@@ -193,4 +200,142 @@ it('Cannot Make Reservation On Office That Belongs To The User', function () {
 
     $response->assertUnprocessable()
         ->assertJsonValidationErrors(['office_id' => 'You cannot make a reservation on your own office']);
+});
+
+it('Cannot Make Reservation On Office That Is Pending Or Hidden', function ()
+{
+    $user = User::factory()->create();
+
+    $office = Office::factory()->create([
+        'approval_status' => Office::APPROVAL_PENDING
+    ]);
+
+    $office2 = Office::factory()->create([
+        'hidden' => true
+    ]);
+
+    Sanctum::actingAs($user, ['*']);
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => now()->addDay(),
+        'end_date' => now()->addDays(41),
+    ]);
+
+    $response2 = $this->postJson('api/reservations', [
+        'office_id' => $office2->id,
+        'start_date' => now()->addDay(),
+        'end_date' => now()->addDays(41),
+    ]);
+
+    $response->assertUnprocessable()
+        ->assertJsonValidationErrors(['office_id' => 'You cannot make a reservation on a hidden office']);
+
+    $response2->assertUnprocessable()
+        ->assertJsonValidationErrors(['office_id' => 'You cannot make a reservation on a hidden office']);
+});
+
+it('Cannot Make Reservation Less Than 2 Days', function ()
+{
+    $user = User::factory()->create();
+
+    $office = Office::factory()->create();
+
+    Sanctum::actingAs($user, ['*']);
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => now()->addDay(),
+        'end_date' => now()->addDay(),
+    ]);
+
+    $response->assertUnprocessable()
+        ->assertJsonValidationErrors(['end_date' => 'The end date field must be a date after start date.']);
+});
+
+it('Cannot Make Reservation On SameDay', function ()
+{
+    $user = User::factory()->create();
+
+    $office = Office::factory()->create();
+
+    Sanctum::actingAs($user, ['*']);
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => now()->toDateString(),
+        'end_date' => now()->addDays(3)->toDateString(),
+    ]);
+
+    $response->assertUnprocessable()
+        ->assertJsonValidationErrors(['start_date' => 'The start date field must be a date after today.']);
+});
+
+it('Make Reservation For 2 Days', function ()
+{
+    $user = User::factory()->create();
+
+    $office = Office::factory()->create();
+
+    Sanctum::actingAs($user, ['*']);
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => now()->addDay(),
+        'end_date' => now()->addDays(2),
+    ]);
+
+    $response->assertCreated();
+});
+
+it('Cannot Make Reservation Thats Conflicting', function ()
+{
+    $user = User::factory()->create();
+
+    $fromDate = now()->addDays(2)->toDateString();
+    $toDate = now()->addDay(15)->toDateString();
+
+    $office = Office::factory()->create();
+
+    Reservation::factory()->for($office)->create([
+        'start_date' => now()->addDay(2),
+        'end_date' => $toDate,
+    ]);
+
+    Sanctum::actingAs($user, ['*']);
+
+    dump(DB::table('reservations')->get());
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => $fromDate,
+        'end_date' => $toDate,
+    ]);
+
+    // dd(DB::getQueryLog());
+
+    $response->assertUnprocessable()
+        ->assertJsonValidationErrors(['office_id' => 'You cannot make a reservation during this time']);
+});
+
+it('Sends Notifications On New Reservations', function ()
+{
+    Notification::fake();
+
+    $user = User::factory()->create();
+
+    $office = Office::factory()->create();
+
+    Sanctum::actingAs($user, ['*']);
+
+    $response = $this->postJson('api/reservations', [
+        'office_id' => $office->id,
+        'start_date' => now()->addDay(),
+        'end_date' => now()->addDays(2),
+    ]);
+
+    Notification::assertSentTo($user, NewUserReservation::class);
+    Notification::assertSentTo($office->user, NewHostReservation::class);
+
+    $response->assertCreated();
 });

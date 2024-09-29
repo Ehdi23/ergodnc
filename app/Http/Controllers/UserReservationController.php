@@ -2,18 +2,20 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Resources\ReservationResource;
 use App\Models\Office;
 use App\Models\Reservation;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Notification;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Cache;
+use App\Notifications\NewHostReservation;
+use App\Notifications\NewUserReservation;
+use App\Http\Resources\ReservationResource;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class UserReservationController extends Controller
 {
@@ -91,6 +93,8 @@ class UserReservationController extends Controller
                 Carbon::parse($data['start_date'])->startOfDay()
             ) + 1;
 
+            // dd($office->reservations()->activeBetween($data['start_date'], $data['end_date'])->exists());
+            
             if ($office->reservations()->activeBetween($data['start_date'], $data['end_date'])->exists()) {
                 throw ValidationException::withMessages([
                     'office_id' => 'You cannot make a reservation during this time'
@@ -119,8 +123,8 @@ class UserReservationController extends Controller
             ]);
         });
 
-        // Notification::send(auth()->user(), new NewUserReservation($reservation));
-        // Notification::send($office->user, new NewHostReservation($reservation));
+        Notification::send(auth()->user(), new NewUserReservation($reservation));
+        Notification::send($office->user, new NewHostReservation($reservation));
 
         return ReservationResource::make(
             $reservation->load('office')
@@ -128,42 +132,31 @@ class UserReservationController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
-     */
-    public function store(StoreReservationRequest $request)
-    {
-        //
-    }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(Reservation $reservation)
-    {
-        //
-    }
-
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Reservation $reservation)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(UpdateReservationRequest $request, Reservation $reservation)
-    {
-        //
-    }
-
-    /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Reservation $reservation)
+    public function cancel(Reservation $reservation)
     {
-        //
+        abort_unless(
+            auth()->user()->tokenCan('reservations.cancel'),
+            Response::HTTP_FORBIDDEN
+        );
+
+        if (
+            $reservation->user_id != auth()->id() ||
+            $reservation->status == Reservation::STATUS_CANCELLED ||
+            $reservation->start_date < now()->toDateString()
+        ) {
+            throw ValidationException::withMessages([
+                'reservation' => 'You cannot cancel this reservation'
+            ]);
+        }
+
+        $reservation->update([
+            'status' => Reservation::STATUS_CANCELLED
+        ]);
+
+        return ReservationResource::make(
+            $reservation->load('office')
+        );
     }
 }

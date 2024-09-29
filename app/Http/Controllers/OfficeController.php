@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Auth;
 use App\Http\Resources\OfficeResource;
 use Illuminate\Support\Facades\Storage;
 use App\Models\Validators\OfficeValidator;
+use App\Notifications\OfficePendingApproval;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -29,18 +30,32 @@ class OfficeController extends Controller
     public function index(): JsonResource
     {
         $offices = Office::query()
-            // if the request contains a host_id (condition ture), invoke the closure fn ($builder) => $builder->whereUserId(request('host_id'))
-            ->when(request('user_id') && Auth::check() && request('user_id') === auth()->user()->id,
-            fn($builder) => $builder,
-            fn($builder) => $builder->where('approval_status', Office::APPROVAL_APPROVED)->where('hidden', false))
-            ->when(request('visitor_id'), fn($builder) => $builder->whereRelation('reservations', 'user_id', '=', request('visitor_id')))
+            ->when(
+                request('user_id') && auth()->user() && request('user_id') == auth()->id(),
+                fn($builder) => $builder,
+                fn($builder) => $builder->where('approval_status', Office::APPROVAL_APPROVED)->where('hidden', false)
+            )
+            ->when(request('user_id'), fn($builder) => $builder->whereUserId(request('user_id')))
+            ->when(
+                request('visitor_id'),
+                fn($builder) => $builder->whereRelation('reservations', 'user_id', '=', request('visitor_id'))
+            )
             ->when(
                 request('lat') && request('lng'),
                 fn($builder) => $builder->nearestTo(request('lat'), request('lng')),
                 fn($builder) => $builder->orderBy('id', 'ASC')
             )
+            ->when(
+                request('tags'),
+                fn($builder) => $builder->whereHas(
+                    'tags',
+                    fn($builder) => $builder->whereIn('id', request('tags')),
+                    '=',
+                    count(request('tags'))
+                )
+            )
             ->with(['images', 'tags', 'user'])
-            ->withCount(['reservations' => fn($builder) => $builder->where('status', Reservation::STATUS_ACTIVE)])
+            ->withCount(['reservations' => fn($builder) => $builder->whereStatus(Reservation::STATUS_ACTIVE)])
             ->paginate(20);
 
         return OfficeResource::collection(
@@ -57,45 +72,32 @@ class OfficeController extends Controller
 
     public function create(): JsonResource
     {
-        abort_unless(auth()->user()->tokenCan('office.create'), Response::HTTP_FORBIDDEN);
+        abort_unless(
+            auth()->user()->tokenCan('office.create'),
+            Response::HTTP_FORBIDDEN
+        );
 
-        $attributes = validator(
-            request()->all(),
-            [
-                'title' => ['required', 'string'],
-                'description' => ['required', 'string'],
-                'lat' => ['required', 'numeric'],
-                'lng' => ['required', 'numeric'],
-                'address_line1' => ['required', 'string'],
-                'hidden' => ['bool'],
-                'price_per_day' => ['required', 'integer', 'min:100'],
-                'monthly_discount' => ['integer', 'min:0'],
+        $attributes = (new OfficeValidator())->validate(
+            $office = new Office(),
+            request()->all()
+        );
 
-                'tags' => ['array'],
-                'tags.*' => ['integer', Rule::exists('tags', 'id')]
-            ]
-        )->validate();
+        $attributes['approval_status'] = Office::APPROVAL_PENDING;
+        $attributes['user_id'] = auth()->id();
 
-        $office = DB::transaction(function () use ($attributes) {
-            $user = Auth::user();
+        $office = DB::transaction(function () use ($office, $attributes) {
+            $office->fill(
+                Arr::except($attributes, ['tags'])
+            )->save();
 
-            // S'assurer que l'utilisateur est bien authentifié
-            if (!$user) {
-                abort(403, 'Unauthorized');
-            }
-
-            // Créer l'office
-            $office = $user->offices()->create(Arr::except($attributes, ['tags']));
-
-            // Synchroniser les tags
             if (isset($attributes['tags'])) {
                 $office->tags()->attach($attributes['tags']);
-            };
+            }
 
-            return $office; // Retourner l'office pour la réponse
+            return $office;
         });
 
-        Notification::send(User::where('is_admin', true)->get(), new OfficePendingApprovalNotification($office));
+        Notification::send(User::where('is_admin', true)->get(), new OfficePendingApproval($office));
 
         return OfficeResource::make(
             $office->load(['images', 'tags', 'user'])
